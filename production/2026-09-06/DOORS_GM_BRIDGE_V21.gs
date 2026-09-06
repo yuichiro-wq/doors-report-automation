@@ -43,6 +43,13 @@ function runDoorsMonthlyReportV21(reportMonth) {
       );
     }
 
+    // Headline policy: keep operational/data-availability caveats out of slide headlines.
+    // Run this after all renderers so legacy writers cannot overwrite the policy.
+    var headlinePolicy = doorsApplyHeadlinePolicyV1_(month);
+    if (!headlinePolicy || headlinePolicy.status !== 'PASS') {
+      throw new Error('Headline policy failed: ' + JSON.stringify(headlinePolicy));
+    }
+
     doorsBridgeWritePanelV21_(
       month,
       'SUCCESS',
@@ -55,7 +62,8 @@ function runDoorsMonthlyReportV21(reportMonth) {
       reportMonth: month,
       acquisition: acquisition,
       legacyMonthlyReport: legacyResult == null ? null : legacyResult,
-      seoArticlePerformance: seoArticlePerformance
+      seoArticlePerformance: seoArticlePerformance,
+      headlinePolicy: headlinePolicy
     };
   } catch (err) {
     doorsBridgeWritePanelV21_(
@@ -147,6 +155,113 @@ function doorsBridgeWritePanelV21_(month, state, statusText, slideText) {
     console.warn('Operation panel update failed: ' + panelErr);
   }
 }
+
+
+/**
+ * Slide headline policy v1.
+ *
+ * Principle:
+ * - Headline = what the page shows / what happened / the business insight.
+ * - Data availability, confirmed month, missing output, validation/gate status,
+ *   SSOT state, workaround and cross-page references belong in subtitle/notes.
+ *
+ * This is intentionally narrow: only known headline-owned slides are touched.
+ * It does not reorder slides, add/delete pages, or change data tables.
+ */
+function doorsApplyHeadlinePolicyV1_(reportMonth) {
+  var presentationId = '17qy7JYXMWmjhUbPrmvpURKOkT1TqsF8-jkM74jxw5-4';
+  var pres = SlidesApp.openById(presentationId);
+
+  var rules = {
+    p8: {
+      titleId: 'p8_i2',
+      subtitleId: 'p8_i3',
+      title: '流入LP｜主要な流入ページの動向',
+      subtitle: 'GSCは最新確定値を掲載。記事別の最新変化はP.17〜22で確認できます。'
+    },
+    p11_channel_202607: {
+      titleId: 'p11ch_title',
+      subtitleId: 'p11ch_sub',
+      title: 'チャネル別流入｜主要チャネルの流入動向',
+      subtitle: '総セッションを基準に、主要チャネルとAI / LLM流入の変化を確認します。'
+    },
+    p13: {
+      titleId: 'p13_i2',
+      subtitleId: 'p13_i3',
+      title: '読了｜カテゴリ別の読了率から改善対象を確認します',
+      subtitle: 'カテゴリ間の差を比較し、改善優先度の高いテーマを把握します。計測条件は注記で管理します。'
+    },
+    p23: {
+      titleId: 'p23_i2',
+      subtitleId: 'p23_i3',
+      title: 'SEO最新ニュース｜検索・生成AI環境の重要トピック',
+      subtitle: '検索CTR・生成AI可視性など、次月施策に影響するトピックを整理します。'
+    }
+  };
+
+  var forbidden = /(未出力|未確定|未登録|直近確定|検証ゲート|validation\s*gate|SSOT|出力待ち|再確定|推測値)/i;
+  var slides = pres.getSlides();
+  var slideById = {};
+  slides.forEach(function(slide) {
+    slideById[slide.getObjectId()] = slide;
+  });
+
+  var updated = [];
+  Object.keys(rules).forEach(function(slideId) {
+    var rule = rules[slideId];
+    var slide = slideById[slideId];
+    if (!slide) throw new Error('Headline policy target slide missing: ' + slideId);
+
+    doorsSetSlideShapeTextByIdV1_(slide, rule.titleId, rule.title);
+    doorsSetSlideShapeTextByIdV1_(slide, rule.subtitleId, rule.subtitle);
+
+    var actualTitle = doorsGetSlideShapeTextByIdV1_(slide, rule.titleId);
+    if (actualTitle !== rule.title) {
+      throw new Error('Headline policy readback mismatch: ' + slideId);
+    }
+    if (forbidden.test(actualTitle)) {
+      throw new Error('Operational wording remains in headline: ' + slideId + ' / ' + actualTitle);
+    }
+    updated.push(slideId);
+  });
+
+  pres.saveAndClose();
+
+  return {
+    status: 'PASS',
+    reportMonth: reportMonth,
+    policyVersion: 'headline-business-first-v1',
+    updatedSlides: updated
+  };
+}
+
+function doorsSetSlideShapeTextByIdV1_(slide, elementId, text) {
+  var elements = slide.getPageElements();
+  for (var i = 0; i < elements.length; i++) {
+    var el = elements[i];
+    if (el.getObjectId() !== elementId) continue;
+    if (el.getPageElementType() !== SlidesApp.PageElementType.SHAPE) {
+      throw new Error('Headline policy target is not a shape: ' + elementId);
+    }
+    el.asShape().getText().setText(text);
+    return;
+  }
+  throw new Error('Headline policy element missing: ' + elementId);
+}
+
+function doorsGetSlideShapeTextByIdV1_(slide, elementId) {
+  var elements = slide.getPageElements();
+  for (var i = 0; i < elements.length; i++) {
+    var el = elements[i];
+    if (el.getObjectId() !== elementId) continue;
+    if (el.getPageElementType() !== SlidesApp.PageElementType.SHAPE) {
+      throw new Error('Headline policy target is not a shape: ' + elementId);
+    }
+    return String(el.asShape().getText().asString()).replace(/\s+$/, '');
+  }
+  throw new Error('Headline policy element missing: ' + elementId);
+}
+
 
 function doorsBridgeShortErrorV21_(err) {
   var s = String(err && err.message ? err.message : err || 'unknown error');
